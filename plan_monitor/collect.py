@@ -20,7 +20,8 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
             result_queue: 'mp.Queue[Dict[str, Any]]') -> None:
     conn, db_tz = common.get_db_conn(odbc_conn_string)
     next_poll_due = datetime.utcnow()
-    read_executions_from = datetime.now(db_tz) - config.REFRESH_INTERVAL_MINUTES
+    read_executions_from = (datetime.now(db_tz) -
+                            timedelta(minutes=config.REFRESH_INTERVAL_MINUTES)).replace(tzinfo=None)
     exit_message_logged = False
 
     try:
