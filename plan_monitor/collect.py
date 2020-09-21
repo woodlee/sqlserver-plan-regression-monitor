@@ -3,6 +3,7 @@ import datetime
 import logging
 import multiprocessing as mp
 import queue
+import signal
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any
@@ -18,13 +19,14 @@ logger = logging.getLogger('plan_monitor.collect')
 
 def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
             result_queue: 'mp.Queue[Dict[str, Any]]') -> None:
-    conn, db_tz = common.get_db_conn(odbc_conn_string)
-    next_poll_due = datetime.utcnow()
-    read_executions_from = (datetime.now(db_tz) -
-                            timedelta(minutes=config.REFRESH_INTERVAL_MINUTES)).replace(tzinfo=None)
     exit_message_logged = False
+    conn = None
 
     try:
+        conn, db_tz = common.get_db_conn_with_failover(odbc_conn_string)
+        next_poll_due = datetime.utcnow()
+        read_executions_from = (datetime.now(db_tz) -
+                                timedelta(minutes=config.REFRESH_INTERVAL_MINUTES)).replace(tzinfo=None)
         while not stop_event.is_set():
             if datetime.utcnow() < next_poll_due:
                 time.sleep(0.1)
@@ -76,11 +78,12 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
         exit_message_logged = True
         raise
     finally:
-        conn.close()
-        result_queue.close()
         stop_event.set()
+        result_queue.close()
+        if conn:
+            conn.close()
         if not exit_message_logged:
-            logger.info('Exiting due to shutdown initiated by another subprocess.')
+            logger.info('Exiting due to shutdown initiated by another process.')
 
 
 def collect() -> None:
@@ -107,14 +110,22 @@ def collect() -> None:
 
     start_time = time.perf_counter()
 
-    for process in processes:
-        process.start()
-        # Stagger so the herd doesn't dump a ton onto the results queue or Kafka producer at once:
-        time.sleep(0.5)
-
-    logger.info(f'Started {len(processes)} DB poll subprocesses')
+    def handle_sigterm(*_) -> None:
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, handle_sigterm)
 
     try:
+        started_ct = 0
+        for process in processes:
+            if stop_event.is_set():
+                break
+            process.start()
+            started_ct += 1
+            # Stagger so the herd doesn't dump a ton onto the results queue or Kafka producer at once:
+            time.sleep(0.5)
+
+        logger.info(f'Started {started_ct} DB poll subprocesses')
+
         while not (stop_event.is_set() and result_queue.empty()):
             kafka_producer.poll(0)  # serve delivery callbacks
             try:
@@ -129,18 +140,12 @@ def collect() -> None:
             produced_count += 1
             if produced_count % 100_000 == 0:
                 logger.info(f"Produced {produced_count:,} stats records since process start...")
-                if not all([p.is_alive() for p in processes]):
-                    logger.warning('One or more subprocesses have failed in some sneaky way! Exiting...')
-                    stop_event.set()
     except KeyboardInterrupt:
         logger.info('Received interrupt request; shutting down...')
     finally:
-        elapsed = (time.perf_counter() - start_time)
-        logger.info(f'Exiting after {produced_count:,} records were processed in {elapsed:.1f} seconds. Cleaning up...')
         stop_event.set()
-        time.sleep(1)
-        result_queue.close()
-        result_queue.join_thread()
+        elapsed = (time.perf_counter() - start_time)
+        logger.info(f'Exiting after {produced_count:,} records were produced in {elapsed:.1f} seconds. Cleaning up...')
         for process in processes:
             if process.is_alive():
                 process.join(timeout=0.5)
@@ -151,4 +156,5 @@ def collect() -> None:
 
 
 if __name__ == "__main__":
+    logger.info('Starting...')
     collect()
