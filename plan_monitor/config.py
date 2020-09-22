@@ -37,6 +37,11 @@ REFRESH_INTERVAL_MINUTES = int(os.environ.get('REFRESH_INTERVAL_MINUTES', 60 * 4
 # gathering stats history, but associated plans will not be considered bad. NOTE: this may be affected by clock skew!!
 MAX_ALLOWED_EVALUATION_LAG_SECONDS = int(os.environ.get('MAX_ALLOWED_EVALUATION_LAG_SECONDS', 120))
 
+# On a given DB instance, the evictor will not evict more than EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW plans within
+# the sliding time window defined by EVICTION_THROTTLE_TIME_WINDOW_SECONDS. More than anything this is to protect
+# against a possible cascade of evictions if the global plan cache is flushed, e.g. by DBCC FREEPROCCACHE().
+EVICTION_THROTTLE_TIME_WINDOW_SECONDS = int(os.environ.get('EVICTION_THROTTLE_TIME_WINDOW_SECONDS', 300))
+EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW = int(os.environ.get('EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW', 5))
 
 # Bad plan detection tuning
 # ------------------------------------------------------------------------------------------------------------

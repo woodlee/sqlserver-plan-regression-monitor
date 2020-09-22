@@ -1,5 +1,6 @@
 import logging.config
 import os
+import signal
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 
@@ -26,3 +27,10 @@ logging.config.dictConfig({
         }
     }
 })
+
+
+def handle_sigterm(*_) -> None:
+    raise KeyboardInterrupt
+
+
+signal.signal(signal.SIGTERM, handle_sigterm)

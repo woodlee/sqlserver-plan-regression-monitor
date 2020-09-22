@@ -4,7 +4,8 @@ import datetime
 import logging
 import socket
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Any
+from functools import partial
+from typing import Dict, List, Any, Tuple
 
 import confluent_kafka
 import confluent_kafka.schema_registry.avro
@@ -15,27 +16,28 @@ from . import config, message_schemas, common
 logger = logging.getLogger('plan_monitor.detect')
 
 
-def find_bad_plans(plans: Dict[str, Dict], message_time: datetime) -> List[Dict[str, Any]]:
-    must_created_before = message_time - timedelta(seconds=config.MIN_NEW_PLAN_AGE_SECONDS)
-    must_created_after = message_time - timedelta(seconds=config.MAX_NEW_PLAN_AGE_SECONDS)
-    must_executed_after = message_time - timedelta(seconds=config.MAX_AGE_OF_LAST_EXECUTION_SECONDS)
+def find_bad_plans(plans: Dict[str, Dict], stats_time: datetime) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     prior_times, prior_reads, prior_execs, prior_plans_count, prior_last_execution = 0, 0, 0, 0, 0
-    candidates, bad_plans = [], []
+    prior_plans, candidate_bad_plans, bad_plans = [], [], []
     prior_worst_plan_hashes = set()
 
     for plan_handle, plan_stats in plans.items():
-        if plan_stats['execution_count'] <= 1:  # shouldn't happen, just being cautious
+        # shouldn't happen bc of the filter in the STATS_DMVS_QUERY SQL query, just being cautious:
+        if plan_stats['execution_count'] <= 1:
             continue
 
         plan_creation_time = datetime.fromtimestamp(plan_stats['creation_time'] / 1000.0, timezone.utc)
         last_execution_time = datetime.fromtimestamp(plan_stats['last_execution_time'] / 1000.0, timezone.utc)
-        plan_age_seconds = (message_time - plan_creation_time).total_seconds()
+        plan_age_seconds = (stats_time - plan_creation_time).total_seconds()
+        last_exec_age_seconds = (stats_time - last_execution_time).total_seconds()
 
-        if plan_creation_time > must_created_before:
+        if plan_age_seconds < config.MIN_NEW_PLAN_AGE_SECONDS:
             # too new; ignore entirely for now. If it's a problem we'll catch it on next poll
             continue
-        elif plan_creation_time < must_created_after or last_execution_time < must_executed_after:
+        elif plan_age_seconds > config.MAX_NEW_PLAN_AGE_SECONDS or \
+                last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS:
             # this is an old or "established" plan; gather its stats but don't consider it for "badness"
+            prior_plans.append(plan_stats)
             prior_plans_count += 1
             prior_times += plan_stats['total_elapsed_time']
             prior_reads += plan_stats['total_logical_reads']
@@ -55,14 +57,14 @@ def find_bad_plans(plans: Dict[str, Dict], message_time: datetime) -> List[Dict[
             # not gonna flush single statements that do writes
             continue
         else:
-            candidates.append(plan_stats)
+            candidate_bad_plans.append(plan_stats)
 
     # need enough executions prior plans to be able to trust them as a point of comparison
-    if prior_plans_count and candidates and prior_execs > config.MIN_EXECUTION_COUNT:
+    if prior_plans_count and candidate_bad_plans and prior_execs > config.MIN_EXECUTION_COUNT:
         avg_prior_time = prior_times / prior_execs
         avg_prior_reads = prior_reads / prior_execs
 
-        for plan_stats in candidates:
+        for plan_stats in candidate_bad_plans:
             if prior_worst_plan_hashes == {plan_stats['worst_statement_query_plan_hash']}:
                 # prior and candidate plans are logically equivalent, at least on their slowest query, so don't
                 # bother evicting
@@ -105,31 +107,19 @@ Avg logical reads per exec:   {avg_reads:>10,.0f} reads
 '''
                 logger.info(msg)
 
-    return bad_plans
-
-
-def set_offsets(consumer: confluent_kafka.DeserializingConsumer,
-                partitions: List[confluent_kafka.TopicPartition]) -> None:
-    start_from = datetime.now(timezone.utc) - timedelta(minutes=config.REFRESH_INTERVAL_MINUTES)
-    logger.info('Setting consumer offsets to start from %s', start_from)
-    for p in partitions:
-        p.offset = int(start_from.timestamp() * 1000)  # yep, it's a weird API
-    consumer.assign(partitions)
-    for p in consumer.offsets_for_times(partitions):
-        logger.debug('Topic %s partition %s SEEKing to offset %s', p.topic, p.partition, p.offset)
-        consumer.seek(p)
+    return bad_plans, prior_plans
 
 
 def detect() -> None:
     schema_registry = confluent_kafka.schema_registry.SchemaRegistryClient({'url': config.SCHEMA_REGISTRY_URL})
     key_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.STATS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
+        message_schemas.BAD_PLANS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
     value_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.STATS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
+        message_schemas.BAD_PLANS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
     key_deserializer = confluent_kafka.schema_registry.avro.AvroDeserializer(
-        message_schemas.STATS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
+        message_schemas.QUERY_STATS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
     value_deserializer = confluent_kafka.schema_registry.avro.AvroDeserializer(
-        message_schemas.STATS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
+        message_schemas.QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
 
     producer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
                        'key.serializer': key_serializer,
@@ -148,11 +138,15 @@ def detect() -> None:
 
     kafka_producer = confluent_kafka.SerializingProducer(producer_config)
     kafka_consumer = confluent_kafka.DeserializingConsumer(consumer_config)
-    kafka_consumer.subscribe([config.STATS_TOPIC], on_assign=set_offsets)
+    kafka_consumer.subscribe(
+        [config.STATS_TOPIC], on_assign=partial(common.set_offsets_to_time, config.REFRESH_INTERVAL_MINUTES * 60))
 
     try:
         while True:
+            # Top level: one per query on a particular DB. Next level: plans seen for that SQL query, keyed by the
+            # plan_handle. 3rd and innermost level: the dict of stats collected for the plan
             queries = collections.defaultdict(dict)
+
             memory_flush_deadline = datetime.utcnow() + timedelta(minutes=config.REFRESH_INTERVAL_MINUTES)
 
             while datetime.utcnow() < memory_flush_deadline:
@@ -161,31 +155,33 @@ def detect() -> None:
                 if msg is None:
                     continue
 
-                message_time = datetime.fromtimestamp(msg.timestamp()[1] / 1000, timezone.utc)
-                caught_up = (datetime.now(timezone.utc) - message_time).total_seconds() < \
+                stats_time = datetime.fromtimestamp(msg.value()['stats_query_time'] / 1000, timezone.utc)
+                caught_up = (datetime.now(timezone.utc) - stats_time).total_seconds() < \
                     config.MAX_ALLOWED_EVALUATION_LAG_SECONDS
-                key_tup = (msg.key()['db_identifier'], msg.key()['set_options'], msg.key()['sql_handle'])
-                queries[key_tup][msg.value()['plan_handle']] = dict(msg.value())
+                query_key = (msg.key()['db_identifier'], msg.key()['set_options'], msg.key()['sql_handle'])
+                queries[query_key][msg.value()['plan_handle']] = dict(msg.value())
+                queries[query_key][msg.value()['plan_handle']]['source_stats_message_coordinates'] = \
+                    common.msg_coordinates(msg)
 
                 if msg.offset() % 100_000 == 0:
-                    logger.info(f'Reached partition {msg.partition()}, offset {msg.offset():,}, timestamp '
-                                f'{common.format_ts(msg.timestamp()[1])}. Caught up = {caught_up}. Queries cached: '
+                    logger.info(f'Reached {common.format_msg_info(msg)}. Caught up = {caught_up}. Queries cached: '
                                 f'{len(queries):,}')
                 if msg.offset() % 1000 == 0:
                     kafka_producer.poll(0)  # serve delivery callbacks if needed
 
-                if caught_up and len(queries[key_tup]) > 1:  # need other plans to compare to be able to call it "bad"
-                    bad_plans = find_bad_plans(queries[key_tup], message_time)
+                if caught_up and len(queries[query_key]) > 1:  # need other plans to compare to be able to call it "bad"
+                    bad_plans, prior_plans = find_bad_plans(queries[query_key], stats_time)
                     for bad_plan in bad_plans:
                         kafka_producer.poll(0)  # serve delivery callbacks
-                        msg_key = {"db_identifier": bad_plan["db_identifier"],
-                                   "set_options": bad_plan["set_options"],
-                                   "sql_handle": bad_plan["sql_handle"]}
+                        bad_plan['prior_plans'] = prior_plans
+                        msg_key = message_schemas.key_from_value(bad_plan)
                         kafka_producer.produce(topic=config.BAD_PLANS_TOPIC, key=msg_key, value=bad_plan,
                                                on_delivery=common.kafka_producer_delivery_cb)
+                        logger.debug(f'Produced message with key {msg_key} and value {bad_plan}')
 
             logger.info('Clearing %s queries from memory and reloading from source Kafka topic...', len(queries))
-            set_offsets(kafka_consumer, kafka_consumer.assignment())
+            common.set_offsets_to_time(config.REFRESH_INTERVAL_MINUTES * 60,
+                                       kafka_consumer, kafka_consumer.assignment())
     except KeyboardInterrupt:
         logger.info('Received interrupt request; shutting down...')
     finally:
