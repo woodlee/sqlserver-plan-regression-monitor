@@ -3,7 +3,6 @@ import datetime
 import logging
 import multiprocessing as mp
 import queue
-import signal
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any
@@ -89,9 +88,9 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
 def collect() -> None:
     schema_registry = confluent_kafka.schema_registry.SchemaRegistryClient({'url': config.SCHEMA_REGISTRY_URL})
     key_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.STATS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
+        message_schemas.QUERY_STATS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
     value_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.STATS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
+        message_schemas.QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
     producer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
                        'key.serializer': key_serializer,
                        'value.serializer': value_serializer,
@@ -109,10 +108,6 @@ def collect() -> None:
                                     args=(db_identifier, odbc_conn_string, stop_event, result_queue)))
 
     start_time = time.perf_counter()
-
-    def handle_sigterm(*_) -> None:
-        raise KeyboardInterrupt
-    signal.signal(signal.SIGTERM, handle_sigterm)
 
     try:
         started_ct = 0
@@ -132,11 +127,8 @@ def collect() -> None:
                 msg_value = result_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
-            msg_key = {"db_identifier": msg_value["db_identifier"],
-                       "set_options": msg_value["set_options"],
-                       "sql_handle": msg_value["sql_handle"]}
-            kafka_producer.produce(topic=config.STATS_TOPIC, key=msg_key, value=msg_value,
-                                   on_delivery=common.kafka_producer_delivery_cb)
+            kafka_producer.produce(topic=config.STATS_TOPIC, key=message_schemas.key_from_value(msg_value),
+                                   value=msg_value, on_delivery=common.kafka_producer_delivery_cb)
             produced_count += 1
             if produced_count % 100_000 == 0:
                 logger.info(f"Produced {produced_count:,} stats records since process start...")

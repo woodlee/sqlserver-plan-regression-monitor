@@ -59,3 +59,45 @@ class StatsDmvsQueryResult(NamedTuple):
     worst_statement_query_plan_hash: bytes
     statement_count: int
     stats_query_time: datetime
+
+
+SNIFFED_PARAMS_QUERY = '''
+WITH basedata AS (
+    SELECT
+        qs.statement_start_offset/2 AS stmt_start
+        , qp.query_plan
+        , charindex('<ParameterList>', qp.query_plan) + len('<ParameterList>') AS paramstart
+        , charindex('</ParameterList>', qp.query_plan) AS paramend
+    FROM sys.dm_exec_query_stats qs
+    CROSS APPLY sys.dm_exec_text_query_plan(qs.plan_handle, qs.statement_start_offset,
+        qs.statement_end_offset) qp
+    WHERE qs.plan_handle = ?
+), next_level AS (
+    SELECT
+        stmt_start
+        , CASE
+            WHEN paramend > paramstart
+            THEN CAST(SUBSTRING(query_plan, paramstart, paramend - paramstart) AS xml)
+        END AS params
+    FROM basedata
+)
+SELECT n.stmt_start AS pos
+    ,cr.c.value('@Column', 'nvarchar(128)') AS param_name
+    ,cr.c.value('@ParameterCompiledValue', 'nvarchar(128)') AS param_sniffed_value
+FROM next_level n
+CROSS APPLY n.params.nodes('ColumnReference') AS cr(c)
+ORDER BY n.stmt_start, param_name
+'''
+
+FINAL_STATS_QUERY = '''
+SELECT MAX(last_execution_time), MAX(execution_count)
+FROM sys.dm_exec_query_stats
+WHERE plan_handle = ?
+GROUP BY plan_handle
+'''
+
+CONNECT_METADATA_QUERY = 'SELECT DB_NAME(), DATENAME(TZOFFSET , SYSDATETIMEOFFSET()), GETUTCDATE()'
+PLAN_XML_QUERY = 'SELECT query_plan FROM sys.dm_exec_query_plan (?)'
+PLAN_ATTRIBUTES_QUERY = 'SELECT attribute, CAST(value AS VARCHAR) AS value FROM sys.dm_exec_plan_attributes (?)'
+SQL_TEXT_QUERY = 'SELECT text FROM sys.dm_exec_sql_text (?)'
+EVICT_PLAN_QUERY = 'DBCC FREEPROCCACHE(?)'
