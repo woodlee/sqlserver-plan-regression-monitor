@@ -43,6 +43,13 @@ MAX_ALLOWED_EVALUATION_LAG_SECONDS = int(os.environ.get('MAX_ALLOWED_EVALUATION_
 EVICTION_THROTTLE_TIME_WINDOW_SECONDS = int(os.environ.get('EVICTION_THROTTLE_TIME_WINDOW_SECONDS', 300))
 EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW = int(os.environ.get('EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW', 5))
 
+# Settings that you provide if you are using the notify_slack module to send eviction notices:
+SLACK_API_TOKEN = os.environ.get('SLACK_API_TOKEN', '')
+SLACK_NOTIFY_CHANNEL = os.environ.get('SLACK_NOTIFY_CHANNEL', '')
+SLACK_MESSAGE_TEMPLATE = os.environ.get('SLACK_MESSAGE_TEMPLATE', '')
+SLACK_POST_AS_BLOCKS = os.environ.get('SLACK_POST_AS_BLOCKS', 'true').lower() in ('1', 't', 'true', 'yes')
+
+
 # Bad plan detection tuning
 # ------------------------------------------------------------------------------------------------------------
 # NOTE: Plan ages are calculated relative to when the stats were gathered from SQL Server, which may be up

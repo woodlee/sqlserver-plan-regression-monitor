@@ -73,7 +73,7 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: datetime) -> Tuple[List[D
             avg_time = plan_stats['total_elapsed_time'] / plan_stats['execution_count']
             avg_reads = plan_stats['total_logical_reads'] / plan_stats['execution_count']
             time_increase_factor = avg_time / avg_prior_time
-            read_increase_factor = avg_reads / avg_prior_reads
+            read_increase_factor = (avg_reads / avg_prior_reads) if avg_prior_reads else 0
 
             if time_increase_factor > config.MIN_TIME_INCREASE_FACTOR or \
                     (time_increase_factor > 1 and read_increase_factor > config.MIN_READS_INCREASE_FACTOR):
@@ -99,11 +99,11 @@ Stats sample time:                {common.format_ts(plan_stats['stats_query_time
 -----
  Avg elapsed time per exec:      {(avg_time / 1000):>7.1f} ms
       vs. {prior_plans_count:>2} prior plan(s):      {(avg_prior_time / 1000):>7.1f} ms
-           Increase factor: {(avg_time / avg_prior_time):>6.1f}x
+           Increase factor: {time_increase_factor:>6.1f}x
 -----
 Avg logical reads per exec:   {avg_reads:>10,.0f} reads
       vs. {prior_plans_count:>2} prior plan(s):   {avg_prior_reads:>10,.0f} reads
-           Increase factor: {((avg_reads / avg_prior_reads) if avg_prior_reads else 0):>6.1f}x
+           Increase factor: {read_increase_factor:>6.1f}x
 '''
                 logger.info(msg)
 
