@@ -3,3 +3,4 @@ pyodbc==4.0.30
 python-dateutil==2.8.1
 pytz==2020.1
 slackclient==2.8.0
+Jinja2==2.11.2
