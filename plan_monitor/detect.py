@@ -3,6 +3,7 @@ import collections
 import datetime
 import logging
 import socket
+import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Dict, List, Any, Tuple
@@ -16,7 +17,7 @@ from . import config, message_schemas, common
 logger = logging.getLogger('plan_monitor.detect')
 
 
-def find_bad_plans(plans: Dict[str, Dict], stats_time: datetime) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     prior_times, prior_reads, prior_execs, prior_plans_count, prior_last_execution = 0, 0, 0, 0, 0
     prior_plans, candidate_bad_plans, bad_plans = [], [], []
     prior_worst_plan_hashes = set()
@@ -26,10 +27,8 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: datetime) -> Tuple[List[D
         if plan_stats['execution_count'] <= 1:
             continue
 
-        plan_creation_time = datetime.fromtimestamp(plan_stats['creation_time'] / 1000.0, timezone.utc)
-        last_execution_time = datetime.fromtimestamp(plan_stats['last_execution_time'] / 1000.0, timezone.utc)
-        plan_age_seconds = (stats_time - plan_creation_time).total_seconds()
-        last_exec_age_seconds = (stats_time - last_execution_time).total_seconds()
+        plan_age_seconds = (stats_time - plan_stats['creation_time']) / 1000
+        last_exec_age_seconds = (stats_time - plan_stats['last_execution_time']) / 1000
 
         if plan_age_seconds < config.MIN_NEW_PLAN_AGE_SECONDS:
             # too new; ignore entirely for now. If it's a problem we'll catch it on next poll
@@ -109,7 +108,6 @@ Avg logical reads per exec:   {avg_reads:>10,.0f} reads
 
     return bad_plans, prior_plans
 
-
 def detect() -> None:
     schema_registry = confluent_kafka.schema_registry.SchemaRegistryClient({'url': config.SCHEMA_REGISTRY_URL})
     key_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
@@ -155,12 +153,14 @@ def detect() -> None:
                 if msg is None:
                     continue
 
-                stats_time = datetime.fromtimestamp(msg.value()['stats_query_time'] / 1000, timezone.utc)
-                caught_up = (datetime.now(timezone.utc) - stats_time).total_seconds() < \
+                msg_key = dict(msg.key())
+                msg_val = dict(msg.value())
+
+                caught_up = time.time() - (msg_val['stats_query_time'] / 1000) < \
                     config.MAX_ALLOWED_EVALUATION_LAG_SECONDS
-                query_key = (msg.key()['db_identifier'], msg.key()['set_options'], msg.key()['sql_handle'])
-                queries[query_key][msg.value()['plan_handle']] = dict(msg.value())
-                queries[query_key][msg.value()['plan_handle']]['source_stats_message_coordinates'] = \
+                query_key = (msg_key['db_identifier'], msg_key['set_options'], msg_key['sql_handle'])
+                queries[query_key][msg_val['plan_handle']] = msg_val
+                queries[query_key][msg_val['plan_handle']]['source_stats_message_coordinates'] = \
                     common.msg_coordinates(msg)
 
                 if msg.offset() % 100_000 == 0:
@@ -170,7 +170,7 @@ def detect() -> None:
                     kafka_producer.poll(0)  # serve delivery callbacks if needed
 
                 if caught_up and len(queries[query_key]) > 1:  # need other plans to compare to be able to call it "bad"
-                    bad_plans, prior_plans = find_bad_plans(queries[query_key], stats_time)
+                    bad_plans, prior_plans = find_bad_plans(queries[query_key], msg_val['stats_query_time'])
                     for bad_plan in bad_plans:
                         kafka_producer.poll(0)  # serve delivery callbacks
                         bad_plan['prior_plans'] = prior_plans

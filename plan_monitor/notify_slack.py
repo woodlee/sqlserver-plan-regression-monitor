@@ -51,7 +51,7 @@ def notify(slack_client: WebClient, msg: confluent_kafka.Message) -> None:
             else:
                 slack_client.chat_postMessage(channel=config.SLACK_NOTIFY_CHANNEL, text=rendered)
         except SlackApiError as e:
-            logger.warning(f"Error sending message to Slack: {e.response['error']}")
+            logger.warning(f"Error sending message to Slack: {e.response.get('error', '<none>')}")
 
 
 def notify_slack() -> None:
