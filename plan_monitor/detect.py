@@ -33,7 +33,10 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
     prior_times, prior_reads, prior_execs, prior_plans_count, prior_last_execution = 0, 0, 0, 0, 0
     prior_plans, candidate_bad_plans, bad_plans = [], [], []
     prior_worst_plan_hashes = set()
-    potential_bad_plan_hashes = {plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
+    # assess which query plan hashes are recent enough to warrant investigation into badness
+    # so we can prevent older plans with the same query plan hash from potentially ballooning
+    # metrics used for determining badness
+    potential_bad_query_plan_hashes = {plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
         if is_plan_under_investigation(plan_stats, stats_time)}
 
     for plan_handle, plan_stats in plans.items():
@@ -48,7 +51,7 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
             # too new; ignore entirely for now. If it's a problem we'll catch it on next poll
             continue
         elif is_established_plan(plan_age_seconds, last_exec_age_seconds) and \
-                current_query_plan_hash not in potential_bad_plan_hashes:
+                current_query_plan_hash not in potential_bad_query_plan_hashes:
             # this is an old or "established" plan; gather its stats but don't consider it for "badness"
             prior_plans.append(plan_stats)
             prior_plans_count += 1
