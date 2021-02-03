@@ -6,7 +6,7 @@ import socket
 import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Set
 
 import confluent_kafka
 import confluent_kafka.schema_registry.avro
@@ -16,7 +16,7 @@ from . import config, message_schemas, common
 
 logger = logging.getLogger('plan_monitor.detect')
 
-def calculate_plan_age_stats(plan_stats: Dict, stats_time: int) -> Tuple(int, int):
+def calculate_plan_age_stats(plan_stats: Dict, stats_time: int) -> Tuple[int, int]:
     plan_age_seconds = (stats_time - plan_stats['creation_time']) / 1000
     last_exec_age_seconds = (stats_time - plan_stats['last_execution_time']) / 1000
     return (plan_age_seconds, last_exec_age_seconds)
@@ -29,15 +29,18 @@ def is_plan_under_investigation(plan_stats: Dict, stats_time: int) -> bool:
     plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats, stats_time)
     return not is_established_plan(plan_age_seconds, last_exec_age_seconds)
 
+# assess which query plan hashes are recent enough to warrant investigation into badness
+# so we can prevent older plans with the same query plan hash from potentially ballooning
+# metrics used for determining badness
+def get_query_plan_hashes_under_investigation(plans: Dict[str, Dict], stats_time: int) -> Set[str]:
+    return {plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
+        if is_plan_under_investigation(plan_stats, stats_time)}
+
 def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     prior_times, prior_reads, prior_execs, prior_plans_count, prior_last_execution = 0, 0, 0, 0, 0
     prior_plans, candidate_bad_plans, bad_plans = [], [], []
     prior_worst_plan_hashes = set()
-    # assess which query plan hashes are recent enough to warrant investigation into badness
-    # so we can prevent older plans with the same query plan hash from potentially ballooning
-    # metrics used for determining badness
-    potential_bad_query_plan_hashes = {plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
-        if is_plan_under_investigation(plan_stats, stats_time)}
+    potential_bad_query_plan_hashes = get_query_plan_hashes_under_investigation(plans, stats_time)
 
     for plan_handle, plan_stats in plans.items():
         # shouldn't happen bc of the filter in the STATS_DMVS_QUERY SQL query, just being cautious:
