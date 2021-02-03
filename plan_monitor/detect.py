@@ -75,6 +75,7 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
         else:
             candidate_bad_plans.append(plan_stats)
 
+    # need enough executions prior plans to be able to trust them as a point of comparison
     if prior_plans_count and candidate_bad_plans and prior_execs > config.MIN_EXECUTION_COUNT:
         avg_prior_time = prior_times / prior_execs
         avg_prior_reads = prior_reads / prior_execs
