@@ -16,32 +16,49 @@ from . import config, message_schemas, common
 
 logger = logging.getLogger('plan_monitor.detect')
 
+def calculate_plan_age_stats(plan_stats: Dict, stats_time: int) -> Tuple(int, int):
+    plan_age_seconds = (stats_time - plan_stats['creation_time']) / 1000
+    last_exec_age_seconds = (stats_time - plan_stats['last_execution_time']) / 1000
+    return (plan_age_seconds, last_exec_age_seconds)
+
+def is_suspect_plan(plan_stats: Dict, stats_time: int) -> bool:
+    plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats)
+    if is_established_plan(plan_age_seconds, last_exec_age_seconds):
+        return False
+    else:
+        return True
+
+def is_established_plan(plan_age_seconds: int, last_exec_age_seconds: int) -> bool:
+    return plan_age_seconds > config.MAX_NEW_PLAN_AGE_SECONDS or \
+            last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS
 
 def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     prior_times, prior_reads, prior_execs, prior_plans_count, prior_last_execution = 0, 0, 0, 0, 0
     prior_plans, candidate_bad_plans, bad_plans = [], [], []
     prior_worst_plan_hashes = set()
+    potential_bad_plan_hashes = set(plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
+        if is_suspect_plan(plan_stats, stats_time))
 
     for plan_handle, plan_stats in plans.items():
         # shouldn't happen bc of the filter in the STATS_DMVS_QUERY SQL query, just being cautious:
         if plan_stats['execution_count'] <= 1:
             continue
-
-        plan_age_seconds = (stats_time - plan_stats['creation_time']) / 1000
-        last_exec_age_seconds = (stats_time - plan_stats['last_execution_time']) / 1000
+        
+        plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats, stats_time)
+        current_query_plan_hash = plan_stats['worst_statement_query_plan_hash']
 
         if plan_age_seconds < config.MIN_NEW_PLAN_AGE_SECONDS:
             # too new; ignore entirely for now. If it's a problem we'll catch it on next poll
             continue
-        elif plan_age_seconds > config.MAX_NEW_PLAN_AGE_SECONDS or \
-                last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS:
+        elif (is_established_plan(plan_age_seconds, last_exec_age_seconds) and \
+                current_query_plan_hash not in potential_bad_plan_hashes:
             # this is an old or "established" plan; gather its stats but don't consider it for "badness"
             prior_plans.append(plan_stats)
             prior_plans_count += 1
             prior_times += plan_stats['total_elapsed_time']
             prior_reads += plan_stats['total_logical_reads']
             prior_execs += plan_stats['execution_count']
-            prior_worst_plan_hashes.add(plan_stats['worst_statement_query_plan_hash'])
+            prior_worst_plan_hashes.add(current_query_plan_hash)
             prior_last_execution = max(prior_last_execution, plan_stats['last_execution_time'])
             continue
         elif plan_stats['total_elapsed_time'] < config.MIN_TOTAL_ELAPSED_TIME_SECONDS * 1_000_000 \
@@ -58,7 +75,6 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
         else:
             candidate_bad_plans.append(plan_stats)
 
-    # need enough executions prior plans to be able to trust them as a point of comparison
     if prior_plans_count and candidate_bad_plans and prior_execs > config.MIN_EXECUTION_COUNT:
         avg_prior_time = prior_times / prior_execs
         avg_prior_reads = prior_reads / prior_execs
@@ -136,6 +152,7 @@ def detect() -> None:
 
     kafka_producer = confluent_kafka.SerializingProducer(producer_config)
     kafka_consumer = confluent_kafka.DeserializingConsumer(consumer_config)
+    # here we subscribe to the topic we've created to queue stats for processing
     kafka_consumer.subscribe(
         [config.STATS_TOPIC], on_assign=partial(common.set_offsets_to_time, config.REFRESH_INTERVAL_MINUTES * 60))
 
@@ -158,6 +175,7 @@ def detect() -> None:
 
                 caught_up = time.time() - (msg_val['stats_query_time'] / 1000) < \
                     config.MAX_ALLOWED_EVALUATION_LAG_SECONDS
+
                 query_key = (msg_key['db_identifier'], msg_key['set_options'], msg_key['sql_handle'])
                 queries[query_key][msg_val['plan_handle']] = msg_val
                 queries[query_key][msg_val['plan_handle']]['source_stats_message_coordinates'] = \
