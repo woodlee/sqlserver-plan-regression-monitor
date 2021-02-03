@@ -27,7 +27,7 @@ class CalculatePlanAge(TestCase):
 
 class IsEstablishedPlan(TestCase):
 
-    # test plan established because plan age is sufficiently old
+    # plan is established because plan age is sufficiently old
     @mock.patch('plan_monitor.config')
     def test_is_established_plan_plan_age(self, conf):
         conf.MAX_AGE_OF_LAST_EXECUTION_SECONDS.return_value = 5
@@ -46,7 +46,7 @@ class IsEstablishedPlan(TestCase):
         is_established = is_established_plan(plan_age_seconds, last_execution_time_seconds)
         self.assertTrue(is_established)
 
-    # test plan established because plan execution age is sufficiently old
+    # plan is established because plan execution age is sufficiently old
     @mock.patch('plan_monitor.config')
     def test_is_established_plan_execution_age(self, conf):
         conf.MAX_AGE_OF_LAST_EXECUTION_SECONDS.return_value = 5
@@ -66,7 +66,7 @@ class IsEstablishedPlan(TestCase):
         is_established = is_established_plan(plan_age_seconds, last_execution_time_seconds)
         self.assertTrue(is_established)
     
-    # test plan established because plan execution age and plan age are sufficiently old
+    # plan is established because plan both execution age and plan age are sufficiently old
     @mock.patch('plan_monitor.config')
     def test_is_established_plan_both(self, conf):
         conf.MAX_AGE_OF_LAST_EXECUTION_SECONDS.return_value = 5
@@ -85,6 +85,7 @@ class IsEstablishedPlan(TestCase):
         is_established = is_established_plan(plan_age_seconds, last_execution_time_seconds)
         self.assertTrue(is_established)
 
+    # plan is not established
     @mock.patch('plan_monitor.config')
     def test_is_not_established_plan(self, conf):
         conf.MAX_AGE_OF_LAST_EXECUTION_SECONDS.return_value = 5
@@ -105,6 +106,7 @@ class IsEstablishedPlan(TestCase):
 
 class GetActiveQueryPlanHashes(TestCase):
 
+    # an established query plan hash matches an unestablished plan
     @mock.patch('plan_monitor.config')
     def test_get_query_plan_hash_under_investigation(self, conf):
         conf.MAX_AGE_OF_LAST_EXECUTION_SECONDS.return_value = 5
@@ -134,7 +136,7 @@ class GetActiveQueryPlanHashes(TestCase):
         self.assertEqual(len(qp_hashes_under_investigation), 1)
         self.assertEqual(qp_hashes_under_investigation.pop(), duplicate_query_plan_hash)
 
-
+    # returns a query hash plan even if neither duplicate is established
     @mock.patch('plan_monitor.config')
     def test_get_query_plan_hash_under_investigation_returns_qp_hash(self, conf):
         conf.MAX_AGE_OF_LAST_EXECUTION_SECONDS.return_value = 5
@@ -164,6 +166,7 @@ class GetActiveQueryPlanHashes(TestCase):
         self.assertEqual(len(qp_hashes_under_investigation), 1)
         self.assertEqual(qp_hashes_under_investigation.pop(), duplicate_query_plan_hash)
 
+    # does not return a query plan hash if duplicates are both established
     @mock.patch('plan_monitor.config')
     def test_get_query_plan_hash_under_investigation_doesnt_return_established_plans(self, conf):
         conf.MAX_AGE_OF_LAST_EXECUTION_SECONDS.return_value = 5
