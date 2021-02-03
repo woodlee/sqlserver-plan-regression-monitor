@@ -153,7 +153,6 @@ def detect() -> None:
 
     kafka_producer = confluent_kafka.SerializingProducer(producer_config)
     kafka_consumer = confluent_kafka.DeserializingConsumer(consumer_config)
-    # here we subscribe to the topic we've created to queue stats for processing
     kafka_consumer.subscribe(
         [config.STATS_TOPIC], on_assign=partial(common.set_offsets_to_time, config.REFRESH_INTERVAL_MINUTES * 60))
 
