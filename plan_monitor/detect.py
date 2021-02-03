@@ -21,23 +21,20 @@ def calculate_plan_age_stats(plan_stats: Dict, stats_time: int) -> Tuple(int, in
     last_exec_age_seconds = (stats_time - plan_stats['last_execution_time']) / 1000
     return (plan_age_seconds, last_exec_age_seconds)
 
-def is_suspect_plan(plan_stats: Dict, stats_time: int) -> bool:
-    plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats)
-    if is_established_plan(plan_age_seconds, last_exec_age_seconds):
-        return False
-    else:
-        return True
-
 def is_established_plan(plan_age_seconds: int, last_exec_age_seconds: int) -> bool:
     return plan_age_seconds > config.MAX_NEW_PLAN_AGE_SECONDS or \
             last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS
+
+def is_plan_under_investigation(plan_stats: Dict, stats_time: int) -> bool:
+    plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats, stats_time)
+    return not is_established_plan(plan_age_seconds, last_exec_age_seconds)
 
 def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     prior_times, prior_reads, prior_execs, prior_plans_count, prior_last_execution = 0, 0, 0, 0, 0
     prior_plans, candidate_bad_plans, bad_plans = [], [], []
     prior_worst_plan_hashes = set()
-    potential_bad_plan_hashes = set(plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
-        if is_suspect_plan(plan_stats, stats_time))
+    potential_bad_plan_hashes = {plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
+        if is_plan_under_investigation(plan_stats, stats_time)}
 
     for plan_handle, plan_stats in plans.items():
         # shouldn't happen bc of the filter in the STATS_DMVS_QUERY SQL query, just being cautious:
@@ -50,7 +47,7 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
         if plan_age_seconds < config.MIN_NEW_PLAN_AGE_SECONDS:
             # too new; ignore entirely for now. If it's a problem we'll catch it on next poll
             continue
-        elif (is_established_plan(plan_age_seconds, last_exec_age_seconds) and \
+        elif is_established_plan(plan_age_seconds, last_exec_age_seconds) and \
                 current_query_plan_hash not in potential_bad_plan_hashes:
             # this is an old or "established" plan; gather its stats but don't consider it for "badness"
             prior_plans.append(plan_stats)
