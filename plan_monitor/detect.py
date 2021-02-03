@@ -175,7 +175,6 @@ def detect() -> None:
 
                 caught_up = time.time() - (msg_val['stats_query_time'] / 1000) < \
                     config.MAX_ALLOWED_EVALUATION_LAG_SECONDS
-
                 query_key = (msg_key['db_identifier'], msg_key['set_options'], msg_key['sql_handle'])
                 queries[query_key][msg_val['plan_handle']] = msg_val
                 queries[query_key][msg_val['plan_handle']]['source_stats_message_coordinates'] = \
