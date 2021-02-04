@@ -16,7 +16,7 @@ from . import config, message_schemas, common
 
 logger = logging.getLogger('plan_monitor.detect')
 
-def calculate_plan_age_stats(plan_stats: Dict, stats_time: int) -> Tuple[int, int]:
+def calculate_plan_age_stats(plan_stats: Dict[str, Any], stats_time: int) -> Tuple[int, int]:
     plan_age_seconds = (stats_time - plan_stats['creation_time']) / 1000
     last_exec_age_seconds = (stats_time - plan_stats['last_execution_time']) / 1000
     return (plan_age_seconds, last_exec_age_seconds)
@@ -25,7 +25,7 @@ def is_established_plan(plan_age_seconds: int, last_exec_age_seconds: int) -> bo
     return plan_age_seconds > config.MAX_NEW_PLAN_AGE_SECONDS or \
             last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS
 
-def is_plan_under_investigation(plan_stats: Dict, stats_time: int) -> bool:
+def is_plan_under_investigation(plan_stats: Dict[str, Any], stats_time: int) -> bool:
     plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats, stats_time)
     return not is_established_plan(plan_age_seconds, last_exec_age_seconds)
 
