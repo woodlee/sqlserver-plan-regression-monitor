@@ -1,4 +1,3 @@
-import os
 import datetime
 from unittest import TestCase, mock
 from plan_monitor import config
