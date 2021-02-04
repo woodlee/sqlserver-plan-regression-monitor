@@ -53,16 +53,16 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
         if plan_age_seconds < config.MIN_NEW_PLAN_AGE_SECONDS:
             # too new; ignore entirely for now. If it's a problem we'll catch it on next poll
             continue
-        elif is_established_plan(plan_age_seconds, last_exec_age_seconds) and \
-            current_query_plan_hash not in potential_bad_query_plan_hashes:
+        elif is_established_plan(plan_age_seconds, last_exec_age_seconds):
             # this is an old or "established" plan; gather its stats but don't consider it for "badness"
             prior_plans.append(plan_stats)
-            prior_plans_count += 1
-            prior_times += plan_stats['total_elapsed_time']
-            prior_reads += plan_stats['total_logical_reads']
-            prior_execs += plan_stats['execution_count']
-            prior_worst_plan_hashes.add(current_query_plan_hash)
-            prior_last_execution = max(prior_last_execution, plan_stats['last_execution_time'])
+            if current_query_plan_hash not in potential_bad_query_plan_hashes:
+                prior_plans_count += 1
+                prior_times += plan_stats['total_elapsed_time']
+                prior_reads += plan_stats['total_logical_reads']
+                prior_execs += plan_stats['execution_count']
+                prior_worst_plan_hashes.add(current_query_plan_hash)
+                prior_last_execution = max(prior_last_execution, plan_stats['last_execution_time'])
             continue
         elif plan_stats['total_elapsed_time'] < config.MIN_TOTAL_ELAPSED_TIME_SECONDS * 1_000_000 \
                 and plan_stats['total_logical_reads'] < config.MIN_TOTAL_LOGICAL_READS:
