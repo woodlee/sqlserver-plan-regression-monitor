@@ -23,7 +23,7 @@ def calculate_plan_age_stats(plan_stats: Dict[str, Any], stats_time: int) -> Tup
 
 def is_established_plan(plan_age_seconds: int, last_exec_age_seconds: int) -> bool:
     return plan_age_seconds > config.MAX_NEW_PLAN_AGE_SECONDS or \
-            last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS
+        last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS
 
 def is_plan_under_investigation(plan_stats: Dict[str, Any], stats_time: int) -> bool:
     plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats, stats_time)
