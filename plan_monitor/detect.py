@@ -54,7 +54,7 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
             # too new; ignore entirely for now. If it's a problem we'll catch it on next poll
             continue
         elif is_established_plan(plan_age_seconds, last_exec_age_seconds) and \
-                current_query_plan_hash not in potential_bad_query_plan_hashes:
+            current_query_plan_hash not in potential_bad_query_plan_hashes:
             # this is an old or "established" plan; gather its stats but don't consider it for "badness"
             prior_plans.append(plan_stats)
             prior_plans_count += 1
