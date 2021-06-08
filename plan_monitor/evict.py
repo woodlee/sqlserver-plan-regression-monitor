@@ -77,6 +77,7 @@ def evict() -> None:
         message_schemas.BAD_PLANS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
 
     producer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
+                       'message.max.bytes': config.KAFKA_PRODUCER_MESSAGE_MAX_BYTES,
                        'key.serializer': key_serializer,
                        'value.serializer': value_serializer,
                        'linger.ms': 100,

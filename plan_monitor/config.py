@@ -8,6 +8,7 @@ import os
 # Kafka things:
 SCHEMA_REGISTRY_URL = os.environ.get('SCHEMA_REGISTRY_URL', 'http://localhost:8081')
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+KAFKA_PRODUCER_MESSAGE_MAX_BYTES = int(os.environ.get('KAFKA_PRODUCER_MESSAGE_MAX_BYTES', 1048576))
 STATS_TOPIC = os.environ.get('STATS_TOPIC', 'sqlserver_plan_regression_monitor_stats')
 BAD_PLANS_TOPIC = os.environ.get('BAD_PLANS_TOPIC', 'sqlserver_plan_regression_monitor_bad_plans')
 EVICTED_PLANS_TOPIC = os.environ.get('EVICTED_PLANS_TOPIC', 'sqlserver_plan_regression_monitor_evicted_plans')

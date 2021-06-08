@@ -46,7 +46,7 @@ def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[s
         # shouldn't happen bc of the filter in the STATS_DMVS_QUERY SQL query, just being cautious:
         if plan_stats['execution_count'] <= 1:
             continue
-        
+
         plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats, stats_time)
         current_query_plan_hash = plan_stats['worst_statement_query_plan_hash']
 
@@ -140,6 +140,7 @@ def detect() -> None:
         message_schemas.QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
 
     producer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
+                       'message.max.bytes': config.KAFKA_PRODUCER_MESSAGE_MAX_BYTES,
                        'key.serializer': key_serializer,
                        'value.serializer': value_serializer,
                        'linger.ms': 100,
