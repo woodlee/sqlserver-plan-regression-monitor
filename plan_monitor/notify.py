@@ -7,6 +7,8 @@ from datetime import datetime
 
 import confluent_kafka
 import confluent_kafka.schema_registry.avro
+import requests
+
 from jinja2 import Template
 from slack import WebClient
 from slack.errors import SlackApiError
@@ -14,10 +16,10 @@ from slack.errors import SlackApiError
 from . import config, message_schemas, common
 
 
-logger = logging.getLogger('plan_monitor.notify_slack')
+logger = logging.getLogger('plan_monitor.notify')
 
 
-def notify(slack_client: WebClient, msg: confluent_kafka.Message) -> None:
+def notify_slack(slack_client: WebClient, msg: confluent_kafka.Message) -> None:
     prior_plans_count, prior_times_sum, prior_reads_sum, prior_execs_sum, prior_last_execution = 0, 0, 0, 0, 0
     msg_val = dict(msg.value())
     for pp in msg_val['prior_plans']:
@@ -54,7 +56,22 @@ def notify(slack_client: WebClient, msg: confluent_kafka.Message) -> None:
             logger.warning(f"Error sending message to Slack: {e.response.get('error', '<none>')}")
 
 
-def notify_slack() -> None:
+def notify_http(msg: confluent_kafka.Message) -> None:
+    if config.HTTP_NOTIFY_TEMPLATE:
+        template = Template(config.HTTP_NOTIFY_TEMPLATE)
+        body = template.render(msg=msg)
+    else:
+        body = json.dumps(msg)
+
+    headers = json.loads(config.HTTP_NOTIFY_HEADERS) if config.HTTP_NOTIFY_HEADERS else {}
+    resp = requests.post(config.HTTP_NOTIFY_URL, data=body, headers=headers, timeout=5.0)
+    resp.raise_for_status()
+
+    logger.debug('Posted eviction notification to %s with code %s and response: %s', config.HTTP_NOTIFY_URL,
+                 resp.status_code, resp.text)
+
+
+def notify() -> None:
     schema_registry = confluent_kafka.schema_registry.SchemaRegistryClient({'url': config.SCHEMA_REGISTRY_URL})
     key_deserializer = confluent_kafka.schema_registry.avro.AvroDeserializer(
         message_schemas.EVICTED_PLANS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
@@ -62,7 +79,7 @@ def notify_slack() -> None:
         message_schemas.EVICTED_PLANS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
 
     consumer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
-                       'group.id': f'sqlserver_plan_regression_monitor_notify_slack_{socket.getfqdn()}',
+                       'group.id': f'sqlserver_plan_regression_monitor_notify_{socket.getfqdn()}',
                        'key.deserializer': key_deserializer,
                        'value.deserializer': value_deserializer,
                        'enable.auto.commit': True,
@@ -72,9 +89,11 @@ def notify_slack() -> None:
 
     kafka_consumer = confluent_kafka.DeserializingConsumer(consumer_config)
     kafka_consumer.subscribe([config.EVICTED_PLANS_TOPIC])
-    slack_client = WebClient(token=config.SLACK_API_TOKEN)
     last_log_heartbeat = datetime.utcnow()
     log_heartbeat_interval_seconds = 60
+
+    if config.SLACK_NOTIFY_CHANNEL:
+        slack_client = WebClient(token=config.SLACK_API_TOKEN)
 
     try:
         while True:
@@ -88,10 +107,17 @@ def notify_slack() -> None:
             if msg is None:
                 continue
 
-            logger.info(f'Notifying Slack channel {config.SLACK_NOTIFY_CHANNEL} for message '
-                        f'@ {common.msg_coordinates(msg)}')
+            if config.SLACK_NOTIFY_CHANNEL:
+                logger.info(f'Notifying Slack channel {config.SLACK_NOTIFY_CHANNEL} for message '
+                            f'@ {common.msg_coordinates(msg)}')
+                notify_slack(slack_client, msg)
+
+            if config.HTTP_NOTIFY_URL:
+                logger.info(f'Notifying via HTTP POST for message '
+                            f'@ {common.msg_coordinates(msg)}')
+                notify_http(msg)
+
             last_log_heartbeat = datetime.utcnow()
-            notify(slack_client, msg)
             kafka_consumer.store_offsets(msg)
     except KeyboardInterrupt:
         logger.info('Received interrupt request; shutting down...')
@@ -102,4 +128,4 @@ def notify_slack() -> None:
 
 if __name__ == "__main__":
     logger.info('Starting...')
-    notify_slack()
+    notify()

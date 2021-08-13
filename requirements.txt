@@ -2,5 +2,6 @@ confluent-kafka[avro]==1.5.0
 pyodbc==4.0.30
 python-dateutil==2.8.1
 pytz==2020.1
+requests==2.26.0
 slackclient==2.8.0
 Jinja2==2.11.2
