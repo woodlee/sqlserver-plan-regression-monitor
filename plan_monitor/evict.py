@@ -28,7 +28,7 @@ def evict_plan(plan_info: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]
             sniffed_params = cursor.fetchall()
             cursor.execute(queries.PLAN_XML_QUERY, plan_handle)
             plan_xml = cursor.fetchone()
-            if not plan_xml:
+            if (not plan_xml) or (not plan_xml[0]):
                 return False, {}
             cursor.execute(queries.PLAN_ATTRIBUTES_QUERY, plan_handle)
             plan_attributes = cursor.fetchall()

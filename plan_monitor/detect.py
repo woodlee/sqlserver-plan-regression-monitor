@@ -17,25 +17,30 @@ from . import config, message_schemas, common
 
 logger = logging.getLogger('plan_monitor.detect')
 
+
 def calculate_plan_age_stats(plan_stats: Dict[str, Any], stats_time: int) -> Tuple[int, int]:
     plan_age_seconds = (stats_time - plan_stats['creation_time']) / 1000
     last_exec_age_seconds = (stats_time - plan_stats['last_execution_time']) / 1000
     return (plan_age_seconds, last_exec_age_seconds)
 
+
 def is_established_plan(plan_age_seconds: int, last_exec_age_seconds: int) -> bool:
     return plan_age_seconds > config.MAX_NEW_PLAN_AGE_SECONDS or \
         last_exec_age_seconds > config.MAX_AGE_OF_LAST_EXECUTION_SECONDS
+
 
 def is_plan_under_investigation(plan_stats: Dict[str, Any], stats_time: int) -> bool:
     plan_age_seconds, last_exec_age_seconds = calculate_plan_age_stats(plan_stats, stats_time)
     return not is_established_plan(plan_age_seconds, last_exec_age_seconds)
 
+
 # assess which query plan hashes are recent enough to warrant investigation into badness
 # so we can prevent older plans with the same query plan hash from potentially ballooning
 # metrics used for determining badness
 def get_query_plan_hashes_under_investigation(plans: Dict[str, Dict], stats_time: int) -> Set[str]:
-    return {plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items() \
-        if is_plan_under_investigation(plan_stats, stats_time)}
+    return {plan_stats['worst_statement_query_plan_hash'] for plan_handle, plan_stats in plans.items()
+            if is_plan_under_investigation(plan_stats, stats_time)}
+
 
 def find_bad_plans(plans: Dict[str, Dict], stats_time: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     prior_times, prior_reads, prior_execs, prior_plans_count, prior_last_execution = 0, 0, 0, 0, 0
