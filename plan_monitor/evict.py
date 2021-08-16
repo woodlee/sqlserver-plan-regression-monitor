@@ -142,8 +142,13 @@ def evict() -> None:
                 msg_key = message_schemas.key_from_value(eviction_msg)
                 eviction_msg["source_bad_plan_message_coordinates"] = common.msg_coordinates(msg)
                 logger.debug(f'Producing message with key {json.dumps(msg_key)} and value {json.dumps(eviction_msg)}')
-                kafka_producer.produce(topic=config.EVICTED_PLANS_TOPIC, key=msg_key, value=eviction_msg,
-                                       on_delivery=kafka_producer_delivery_cb)
+                try:
+                    kafka_producer.produce(topic=config.EVICTED_PLANS_TOPIC, key=msg_key, value=eviction_msg,
+                                           on_delivery=kafka_producer_delivery_cb)
+                except:
+                    logger.error('Error producing message to Kafka. Logging for diagnosis:\ntopic: %s\nkey: %s\nvalue: %s\n',
+                                 config.EVICTED_PLANS_TOPIC, json.dumps(msg_key, indent=4), json.dumps(eviction_msg, indent=4))
+                    raise
                 logger.info(f'Plan evicted based on bad plan message at {common.msg_coordinates(msg)}')
                 throttles[db_id].append(datetime.utcnow())
             else:

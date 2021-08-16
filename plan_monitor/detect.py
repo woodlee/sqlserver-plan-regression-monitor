@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import collections
 import datetime
+import json
 import logging
 import socket
 import time
@@ -196,8 +197,13 @@ def detect() -> None:
                         kafka_producer.poll(0)  # serve delivery callbacks
                         bad_plan['prior_plans'] = prior_plans
                         msg_key = message_schemas.key_from_value(bad_plan)
-                        kafka_producer.produce(topic=config.BAD_PLANS_TOPIC, key=msg_key, value=bad_plan,
-                                               on_delivery=common.kafka_producer_delivery_cb)
+                        try:
+                            kafka_producer.produce(topic=config.BAD_PLANS_TOPIC, key=msg_key, value=bad_plan,
+                                                   on_delivery=common.kafka_producer_delivery_cb)
+                        except:
+                            logger.error('Error producing message to Kafka. Logging for diagnosis:\ntopic: %s\nkey: %s\nvalue: %s\n',
+                                         config.BAD_PLANS_TOPIC, json.dumps(msg_key, indent=4), json.dumps(bad_plan, indent=4))
+                            raise
                         logger.debug(f'Produced message with key {msg_key} and value {bad_plan}')
 
             logger.info('Clearing %s queries from memory and reloading from source Kafka topic...', len(queries))
