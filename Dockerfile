@@ -1,4 +1,4 @@
-FROM python:3.8.5-buster
+FROM python:3.9.10-buster
 
 WORKDIR /tmp
 RUN apt-get update && apt-get install -y unixodbc unixodbc-dev wget build-essential libc6-dev tdsodbc

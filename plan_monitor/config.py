@@ -22,6 +22,7 @@ ODBC_CONN_STRINGS = json.loads(os.environ.get('ODBC_CONN_STRINGS', '''
 # Configuration with sane defaults for most deployments but that you can change if you wish:
 # ------------------------------------------------------------------------------------------------------------
 
+DEBUG_MODE = str(os.environ.get('DEBUG_MODE', '')).lower() in ('1', 't', 'true')
 AVRO_SCHEMA_NAMESPACE = os.environ.get('AVRO_SCHEMA_NAMESPACE', 'sqlserver_plan_regression_monitor')
 DB_STATS_POLL_INTERVAL_SECONDS = int(os.environ.get('DB_STATS_POLL_INTERVAL_SECONDS', 30))
 
@@ -42,7 +43,7 @@ MAX_ALLOWED_EVALUATION_LAG_SECONDS = int(os.environ.get('MAX_ALLOWED_EVALUATION_
 # the sliding time window defined by EVICTION_THROTTLE_TIME_WINDOW_SECONDS. More than anything this is to protect
 # against a possible cascade of evictions if the global plan cache is flushed, e.g. by DBCC FREEPROCCACHE().
 EVICTION_THROTTLE_TIME_WINDOW_SECONDS = int(os.environ.get('EVICTION_THROTTLE_TIME_WINDOW_SECONDS', 300))
-EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW = int(os.environ.get('EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW', 5))
+EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW = int(os.environ.get('EVICTION_THROTTLE_MAX_PLANS_FOR_TIME_WINDOW', 7))
 
 # Settings that you provide if you are using the notify module to send eviction notices TO SLACK:
 SLACK_API_TOKEN = os.environ.get('SLACK_API_TOKEN', '')
@@ -65,12 +66,12 @@ HTTP_NOTIFY_URL = os.environ.get('HTTP_NOTIFY_URL', '')
 MIN_NEW_PLAN_AGE_SECONDS = int(os.environ.get('MIN_NEW_PLAN_AGE_SECONDS', 60))
 
 # Plans older than this will be considered "established" and never considered bad:
-MAX_NEW_PLAN_AGE_SECONDS = int(os.environ.get('MAX_NEW_PLAN_AGE_SECONDS', MIN_NEW_PLAN_AGE_SECONDS * 10))  # 600
+MAX_NEW_PLAN_AGE_SECONDS = int(os.environ.get('MAX_NEW_PLAN_AGE_SECONDS', MIN_NEW_PLAN_AGE_SECONDS * 15))  # 900
 
 # A bad plan must have amassed at least this much elapsed query time OR at least this many total logical reads across
 # all its executions so far:
-MIN_TOTAL_ELAPSED_TIME_SECONDS = int(os.environ.get('MIN_TOTAL_ELAPSED_TIME_SECONDS', 60 * 10))  # 10 minutes
-MIN_TOTAL_LOGICAL_READS = int(os.environ.get('MIN_TOTAL_LOGICAL_READS', 1_000_000))
+MIN_TOTAL_ELAPSED_TIME_SECONDS = int(os.environ.get('MIN_TOTAL_ELAPSED_TIME_SECONDS', 60 * 5))  # 5 minutes
+MIN_TOTAL_LOGICAL_READS = int(os.environ.get('MIN_TOTAL_LOGICAL_READS', 500_000))
 
 # Compared to all prior plans used, a new plan may be considered bad if its average execution time OR its average
 # number of reads per execution increases by the factor specified. An increase in reads will not flag the plan as
@@ -80,11 +81,15 @@ MIN_READS_INCREASE_FACTOR = int(os.environ.get('MIN_READS_INCREASE_FACTOR', 10))
 
 # A plan will not be considered bad if its last execution was longer than this many seconds ago (on the presumption
 # that it has already been replaced with a newer plan):
-MAX_AGE_OF_LAST_EXECUTION_SECONDS = int(os.environ.get('MAX_AGE_OF_LAST_EXECUTION_SECONDS', 30))
+MAX_AGE_OF_LAST_EXECUTION_SECONDS = int(os.environ.get('MAX_AGE_OF_LAST_EXECUTION_SECONDS', 60))
 
 # A plan will not be considered bad until it has been executed this many times OR it has reached this age. Furthermore,
 # executions under all other plans summed together must reach the count threshold for them to be considered as
 # providing "reliable data" for comparison:
-MIN_EXECUTION_COUNT = int(os.environ.get('MIN_EXECUTION_COUNT', 250))
+MIN_EXECUTION_COUNT = int(os.environ.get('MIN_EXECUTION_COUNT', 100))
 MIN_AGE_IN_LIEU_OF_EXEC_COUNT_SECONDS = int(os.environ.get(
-    'MIN_AGE_IN_LIEU_OF_EXEC_COUNT_SECONDS', MAX_NEW_PLAN_AGE_SECONDS - MIN_NEW_PLAN_AGE_SECONDS))  # 540
+    'MIN_AGE_IN_LIEU_OF_EXEC_COUNT_SECONDS', MAX_NEW_PLAN_AGE_SECONDS - MIN_NEW_PLAN_AGE_SECONDS))  # 840
+
+# A comma-separated listed of the '0x'-prefixed hex representations of the SQL plan hashes, e.g. '0x3a7513b1731f3421'
+QUERY_PLAN_HASHES_NOT_TO_EVICT = \
+    tuple([x.lower().strip() for x in os.environ.get('QUERY_PLAN_HASHES_NOT_TO_EVICT', '').split(',')])

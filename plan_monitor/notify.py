@@ -4,25 +4,23 @@ import json
 import logging
 import socket
 from datetime import datetime
+from typing import Dict, Any
 
 import confluent_kafka
-import confluent_kafka.schema_registry.avro
 import requests
 
 from jinja2 import Template
 from slack import WebClient
 from slack.errors import SlackApiError
 
-from . import config, message_schemas, common
-
+from . import config, common, message_schemas
 
 logger = logging.getLogger('plan_monitor.notify')
 
 
-def notify_slack(slack_client: WebClient, msg: confluent_kafka.Message) -> None:
+def notify_slack(slack_client: WebClient, msg: Dict[str, Any]) -> None:
     prior_plans_count, prior_times_sum, prior_reads_sum, prior_execs_sum, prior_last_execution = 0, 0, 0, 0, 0
-    msg_val = dict(msg.value())
-    for pp in msg_val['prior_plans']:
+    for pp in msg['prior_plans']:
         prior_plans_count += 1
         prior_times_sum += pp['total_elapsed_time']
         prior_reads_sum += pp['total_logical_reads']
@@ -31,11 +29,11 @@ def notify_slack(slack_client: WebClient, msg: confluent_kafka.Message) -> None:
 
     avg_prior_time_ms = prior_times_sum / prior_execs_sum / 1000
     avg_prior_reads = prior_reads_sum / prior_execs_sum
-    avg_time_ms = msg_val['total_elapsed_time'] / msg_val['execution_count'] / 1000
-    avg_reads = msg_val['total_logical_reads'] / msg_val['execution_count']
+    avg_time_ms = msg['total_elapsed_time'] / msg['execution_count'] / 1000
+    avg_reads = msg['total_logical_reads'] / msg['execution_count']
     time_increase_factor = avg_time_ms / avg_prior_time_ms
     read_increase_factor = (avg_reads / avg_prior_reads) if avg_prior_reads else 0
-    eviction_latency_seconds = int((msg_val['eviction_time'] - msg_val['creation_time']) / 1000)
+    eviction_latency_seconds = int((msg['eviction_time'] - msg['creation_time']) / 1000)
 
     template = Template(config.SLACK_MESSAGE_TEMPLATE)
     template.globals['format_ts'] = common.format_ts
@@ -72,28 +70,18 @@ def notify_http(msg: confluent_kafka.Message) -> None:
 
 
 def notify() -> None:
-    schema_registry = confluent_kafka.schema_registry.SchemaRegistryClient({'url': config.SCHEMA_REGISTRY_URL})
-    key_deserializer = confluent_kafka.schema_registry.avro.AvroDeserializer(
-        message_schemas.EVICTED_PLANS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
-    value_deserializer = confluent_kafka.schema_registry.avro.AvroDeserializer(
-        message_schemas.EVICTED_PLANS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
-
-    consumer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
-                       'group.id': f'sqlserver_plan_regression_monitor_notify_{socket.getfqdn()}',
-                       'key.deserializer': key_deserializer,
-                       'value.deserializer': value_deserializer,
-                       'enable.auto.commit': True,
-                       'enable.auto.offset.store': False,
-                       'error_cb': lambda evt: logger.error('Kafka error: %s', evt),
-                       'throttle_cb': lambda evt: logger.warning('Kafka throttle event: %s', evt)}
-
-    kafka_consumer = confluent_kafka.DeserializingConsumer(consumer_config)
+    kafka_consumer = common.build_consumer(f'sqlserver_plan_regression_monitor_notify_{socket.getfqdn()}', True,
+                                           message_schemas.EVICTED_PLANS_MESSAGE_KEY_AVRO_SCHEMA,
+                                           message_schemas.EVICTED_PLANS_MESSAGE_VALUE_AVRO_SCHEMA)
     kafka_consumer.subscribe([config.EVICTED_PLANS_TOPIC])
     last_log_heartbeat = datetime.utcnow()
     log_heartbeat_interval_seconds = 60
+    successive_errors = 0
 
     if config.SLACK_NOTIFY_CHANNEL:
         slack_client = WebClient(token=config.SLACK_API_TOKEN)
+    else:
+        slack_client = None
 
     try:
         while True:
@@ -107,10 +95,19 @@ def notify() -> None:
             if msg is None:
                 continue
 
-            if config.SLACK_NOTIFY_CHANNEL:
+            if msg.error():
+                successive_errors += 1
+                logger.error("AvroConsumer error (%s of %s until exception): %s", successive_errors,
+                             common.MAX_SUCCESSIVE_CONSUMER_ERRORS, msg.error())
+                if successive_errors >= common.MAX_SUCCESSIVE_CONSUMER_ERRORS:
+                    raise Exception("Too many AvroConsumer exceptions: {}".format(msg.error()))
+                continue
+            successive_errors = 0
+
+            if slack_client is not None:
                 logger.info(f'Notifying Slack channel {config.SLACK_NOTIFY_CHANNEL} for message '
                             f'@ {common.msg_coordinates(msg)}')
-                notify_slack(slack_client, msg)
+                notify_slack(slack_client, dict(msg.value()))
 
             if config.HTTP_NOTIFY_URL:
                 logger.info(f'Notifying via HTTP POST for message '

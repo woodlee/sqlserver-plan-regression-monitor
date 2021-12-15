@@ -7,9 +7,6 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
-import confluent_kafka
-import confluent_kafka.schema_registry.avro
-
 from . import config, queries, message_schemas, common
 
 
@@ -36,7 +33,8 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
             with conn.cursor() as cursor:
                 query_executions_since = read_executions_from - timedelta(seconds=1)  # "slop factor"
                 q_start = time.perf_counter()
-                cursor.execute(queries.STATS_DMVS_QUERY, query_executions_since)
+                cursor.execute(queries.STATS_DMVS_QUERY, query_executions_since, config.MIN_NEW_PLAN_AGE_SECONDS,
+                               config.MIN_EXECUTION_COUNT, config.MIN_AGE_IN_LIEU_OF_EXEC_COUNT_SECONDS)
                 count = 0
                 while not stop_event.is_set():
                     rows = cursor.fetchmany(config.STATS_ROW_FETCH_SIZE)
@@ -86,19 +84,8 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
 
 
 def collect() -> None:
-    schema_registry = confluent_kafka.schema_registry.SchemaRegistryClient({'url': config.SCHEMA_REGISTRY_URL})
-    key_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.QUERY_STATS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
-    value_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
-    producer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
-                       'message.max.bytes': config.KAFKA_PRODUCER_MESSAGE_MAX_BYTES,
-                       'key.serializer': key_serializer,
-                       'value.serializer': value_serializer,
-                       'linger.ms': 100,
-                       'retry.backoff.ms': 250,
-                       'compression.codec': 'snappy'}
-    kafka_producer = confluent_kafka.SerializingProducer(producer_config)
+    kafka_producer = common.build_producer(message_schemas.QUERY_STATS_MESSAGE_KEY_AVRO_SCHEMA,
+                                           message_schemas.QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA)
     result_queue = mp.Queue(10000)
     stop_event = mp.Event()
     produced_count = 0
@@ -128,8 +115,8 @@ def collect() -> None:
                 msg_value = result_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
-            kafka_producer.produce(topic=config.STATS_TOPIC, key=message_schemas.key_from_value(msg_value),
-                                   value=msg_value, on_delivery=common.kafka_producer_delivery_cb)
+            msg_key = message_schemas.key_from_value(msg_value)
+            kafka_producer.produce(topic=config.STATS_TOPIC, key=msg_key, value=msg_value)
             produced_count += 1
             if produced_count % 100_000 == 0:
                 logger.info(f"Produced {produced_count:,} stats records since process start...")
