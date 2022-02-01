@@ -18,28 +18,33 @@ WITH recent_plans AS (
         AND epa.value = DB_ID()
         AND qs.execution_count > 1
         AND qs.last_execution_time > ?
+), agged AS (
+    SELECT
+        qs.plan_handle AS plan_handle
+        , qs.sql_handle AS sql_handle
+        , CAST(epa.value AS INT) AS set_options
+        , MIN(qs.creation_time) AS creation_time
+        , MAX(qs.last_execution_time) AS last_execution_time
+        , MAX(qs.execution_count) AS execution_count
+        , SUM(qs.total_worker_time) AS total_worker_time
+        , SUM(qs.total_elapsed_time) AS total_elapsed_time
+        , SUM(qs.total_logical_reads) AS total_logical_reads
+        , SUM(qs.total_logical_writes) AS total_logical_writes
+        , MAX(recent_plans.worst_statement_start_offset) AS worst_statement_start_offset
+        , MAX(recent_plans.worst_statement_query_hash) AS worst_statement_query_hash
+        , MAX(recent_plans.worst_statement_query_plan_hash) AS worst_statement_query_plan_hash
+        , COUNT(*) AS statement_count
+        , GETDATE() AS stats_query_time
+    FROM recent_plans
+    JOIN sys.dm_exec_query_stats AS qs ON (recent_plans.plan_handle = qs.plan_handle)
+    CROSS APPLY sys.dm_exec_plan_attributes(qs.plan_handle) AS epa
+    WHERE epa.attribute = 'set_options'
+    GROUP BY qs.plan_handle, qs.sql_handle, epa.value
 )
-SELECT
-    qs.plan_handle AS plan_handle
-    , qs.sql_handle AS sql_handle
-    , CAST(epa.value AS INT) AS set_options
-    , MIN(qs.creation_time) AS creation_time
-    , MAX(qs.last_execution_time) AS last_execution_time
-    , MAX(qs.execution_count) AS execution_count
-    , SUM(qs.total_worker_time) AS total_worker_time
-    , SUM(qs.total_elapsed_time) AS total_elapsed_time
-    , SUM(qs.total_logical_reads) AS total_logical_reads
-    , SUM(qs.total_logical_writes) AS total_logical_writes
-    , MAX(recent_plans.worst_statement_start_offset) AS worst_statement_start_offset
-    , MAX(recent_plans.worst_statement_query_hash) AS worst_statement_query_hash
-    , MAX(recent_plans.worst_statement_query_plan_hash) AS worst_statement_query_plan_hash
-    , COUNT(*) AS statement_count
-    , GETDATE() AS stats_query_time
-FROM recent_plans
-JOIN sys.dm_exec_query_stats AS qs ON (recent_plans.plan_handle = qs.plan_handle)
-CROSS APPLY sys.dm_exec_plan_attributes(qs.plan_handle) AS epa
-WHERE epa.attribute = 'set_options'
-GROUP BY qs.plan_handle, qs.sql_handle, epa.value
+SELECT * FROM agged
+WHERE (total_logical_writes = 0 OR statement_count > 1)
+   AND DATEDIFF(SECOND, creation_time, GETDATE()) > ?
+   AND (execution_count > ? OR DATEDIFF(SECOND, creation_time, GETDATE()) > ?)
 '''
 
 
@@ -94,6 +99,17 @@ SELECT MAX(last_execution_time), MAX(execution_count)
 FROM sys.dm_exec_query_stats
 WHERE plan_handle = ?
 GROUP BY plan_handle
+'''
+
+UPDATED_PLAN_HANDLE_QUERY = '''
+SELECT TOP 1 plan_handle, creation_time
+FROM sys.dm_exec_query_stats
+WHERE sql_handle = ?
+    AND query_plan_hash = ?
+    AND query_hash = ?
+    AND statement_start_offset = ?
+    AND creation_time >= ?
+ORDER BY creation_time
 '''
 
 CONNECT_METADATA_QUERY = 'SELECT DB_NAME(), DATENAME(TZOFFSET , SYSDATETIMEOFFSET()), GETUTCDATE()'

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 import collections
+import copy
 import datetime
 import json
 import logging
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from functools import partial
 from typing import Dict, Any, Optional, Tuple
 
 import confluent_kafka
-import confluent_kafka.schema_registry.avro
 
 from . import config, message_schemas, common, queries
 
@@ -19,28 +19,56 @@ logger = logging.getLogger('plan_monitor.evict')
 
 def evict_plan(plan_info: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
     conn = None
+    plan_info = copy.deepcopy(plan_info)
     try:
         conn, db_tz = common.get_db_conn_with_failover(config.ODBC_CONN_STRINGS[plan_info['db_identifier']])
         plan_handle = bytes.fromhex(plan_info['plan_handle'].replace('0x', ''))
         sql_handle = bytes.fromhex(plan_info['sql_handle'].replace('0x', ''))
+        worst_statement_query_hash = bytes.fromhex(plan_info['worst_statement_query_hash'].replace('0x', ''))
+        worst_statement_query_plan_hash = bytes.fromhex(plan_info['worst_statement_query_plan_hash'].replace('0x', ''))
+        statement_start_offset = plan_info['worst_statement_start_offset']
+        plan_creation_time = datetime.fromtimestamp(plan_info['creation_time'] / 1000).astimezone(db_tz)
+
         with conn.cursor() as cursor:
+            cursor.execute(queries.UPDATED_PLAN_HANDLE_QUERY, sql_handle, worst_statement_query_plan_hash,
+                           worst_statement_query_hash, statement_start_offset,
+                           plan_creation_time.replace(tzinfo=None) - timedelta(milliseconds=10))
+            res = cursor.fetchone()
+            if not res:
+                logger.debug('Eviction skip reason: no result from updated handle query. Params were: %s %s %s %s %s',
+                             plan_info['sql_handle'], plan_info['worst_statement_query_plan_hash'],
+                             plan_info['worst_statement_query_hash'], statement_start_offset, plan_creation_time)
+                return False, {}
+            updated_plan_handle, updated_creation_time = res
+            if updated_plan_handle != plan_handle:
+                logger.info('Substituting new plan handle %s (created %s) for original handle %s (created %s)',
+                            f'0x{updated_plan_handle.hex()}', updated_creation_time, plan_info['plan_handle'],
+                            plan_creation_time)
+                plan_handle = updated_plan_handle
+                plan_info['plan_handle'] = f'0x{updated_plan_handle.hex()}'
+                plan_info['creation_time'] = int(updated_creation_time.replace(tzinfo=db_tz).timestamp() * 1000)
+
             cursor.execute(queries.SNIFFED_PARAMS_QUERY, plan_handle)
             sniffed_params = cursor.fetchall()
             cursor.execute(queries.PLAN_XML_QUERY, plan_handle)
             plan_xml = cursor.fetchone()
             if (not plan_xml) or (not plan_xml[0]):
+                logger.debug('Eviction skip reason: no plan XML')
                 return False, {}
             cursor.execute(queries.PLAN_ATTRIBUTES_QUERY, plan_handle)
             plan_attributes = cursor.fetchall()
             if not plan_attributes:
+                logger.debug('Eviction skip reason: no plan attributes')
                 return False, {}
             cursor.execute(queries.SQL_TEXT_QUERY, sql_handle)
             sql_text = cursor.fetchone()
             if not sql_text:
+                logger.debug('Eviction skip reason: no SQL text')
                 return False, {}
             cursor.execute(queries.FINAL_STATS_QUERY, plan_handle)
             final_stats = cursor.fetchone()
             if not final_stats:
+                logger.debug('Eviction skip reason: no final stats')
                 return False, {}
             cursor.execute(queries.EVICT_PLAN_QUERY, plan_handle)
     finally:
@@ -66,39 +94,16 @@ def kafka_producer_delivery_cb(err: confluent_kafka.KafkaError, msg: confluent_k
 
 
 def evict() -> None:
-    schema_registry = confluent_kafka.schema_registry.SchemaRegistryClient({'url': config.SCHEMA_REGISTRY_URL})
-    key_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.EVICTED_PLANS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
-    value_serializer = confluent_kafka.schema_registry.avro.AvroSerializer(
-        message_schemas.EVICTED_PLANS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
-    key_deserializer = confluent_kafka.schema_registry.avro.AvroDeserializer(
-        message_schemas.BAD_PLANS_MESSAGE_KEY_AVRO_SCHEMA, schema_registry)
-    value_deserializer = confluent_kafka.schema_registry.avro.AvroDeserializer(
-        message_schemas.BAD_PLANS_MESSAGE_VALUE_AVRO_SCHEMA, schema_registry)
-
-    producer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
-                       'message.max.bytes': config.KAFKA_PRODUCER_MESSAGE_MAX_BYTES,
-                       'key.serializer': key_serializer,
-                       'value.serializer': value_serializer,
-                       'linger.ms': 100,
-                       'retry.backoff.ms': 250,
-                       'compression.codec': 'snappy'}
-    consumer_config = {'bootstrap.servers': config.KAFKA_BOOTSTRAP_SERVERS,
-                       'group.id': f'sqlserver_plan_regression_monitor_evict_{socket.getfqdn()}',
-                       'key.deserializer': key_deserializer,
-                       'value.deserializer': value_deserializer,
-                       'enable.auto.commit': True,
-                       'enable.auto.offset.store': False,
-                       'error_cb': lambda evt: logger.error('Kafka error: %s', evt),
-                       'throttle_cb': lambda evt: logger.warning('Kafka throttle event: %s', evt)}
-
-    kafka_producer = confluent_kafka.SerializingProducer(producer_config)
-    kafka_consumer = confluent_kafka.DeserializingConsumer(consumer_config)
+    kafka_consumer = common.build_consumer(f'sqlserver_plan_regression_monitor_evict_{socket.getfqdn()}', True,
+                                           message_schemas.BAD_PLANS_MESSAGE_KEY_AVRO_SCHEMA,
+                                           message_schemas.BAD_PLANS_MESSAGE_VALUE_AVRO_SCHEMA)
+    kafka_producer = common.build_producer(message_schemas.EVICTED_PLANS_MESSAGE_KEY_AVRO_SCHEMA,
+                                           message_schemas.EVICTED_PLANS_MESSAGE_VALUE_AVRO_SCHEMA)
     kafka_consumer.subscribe([config.BAD_PLANS_TOPIC],
                              on_assign=partial(common.set_offsets_to_time, config.MAX_ALLOWED_EVALUATION_LAG_SECONDS))
-
     last_log_heartbeat = datetime.utcnow()
     log_heartbeat_interval_seconds = 60
+    successive_errors = 0
 
     try:
         throttles = collections.defaultdict(partial(collections.deque,
@@ -114,6 +119,15 @@ def evict() -> None:
 
             if msg is None:
                 continue
+
+            if msg.error():
+                successive_errors += 1
+                logger.error("AvroConsumer error (%s of %s until exception): %s", successive_errors,
+                             common.MAX_SUCCESSIVE_CONSUMER_ERRORS, msg.error())
+                if successive_errors >= common.MAX_SUCCESSIVE_CONSUMER_ERRORS:
+                    raise Exception("Too many AvroConsumer exceptions: {}".format(msg.error()))
+                continue
+            successive_errors = 0
 
             message_time = datetime.fromtimestamp(msg.timestamp()[1] / 1000, timezone.utc)
             message_age = (datetime.now(timezone.utc) - message_time).total_seconds()
@@ -136,24 +150,32 @@ def evict() -> None:
                     kafka_consumer.store_offsets(msg)
                     continue
 
+            plan_hash = msg.value()['worst_statement_query_plan_hash'].lower()
+            if plan_hash in config.QUERY_PLAN_HASHES_NOT_TO_EVICT:
+                logger.info(f'Skipping message with query plan hash on the not-to-evict list: {plan_hash}, in '
+                            f'message {common.format_msg_info(msg)}')
+                last_log_heartbeat = datetime.utcnow()
+                kafka_consumer.store_offsets(msg)
+                continue
+
             evicted, eviction_msg = evict_plan(dict(msg.value()))
 
             if evicted:
                 msg_key = message_schemas.key_from_value(eviction_msg)
                 eviction_msg["source_bad_plan_message_coordinates"] = common.msg_coordinates(msg)
-                logger.debug(f'Producing message with key {json.dumps(msg_key)} and value {json.dumps(eviction_msg)}')
                 try:
-                    kafka_producer.produce(topic=config.EVICTED_PLANS_TOPIC, key=msg_key, value=eviction_msg,
-                                           on_delivery=kafka_producer_delivery_cb)
-                except:
-                    logger.error('Error producing message to Kafka. Logging for diagnosis:\ntopic: %s\nkey: %s\nvalue: %s\n',
-                                 config.EVICTED_PLANS_TOPIC, json.dumps(msg_key, indent=4), json.dumps(eviction_msg, indent=4))
+                    kafka_producer.produce(topic=config.EVICTED_PLANS_TOPIC, key=msg_key, value=eviction_msg)
+                except Exception:
+                    logger.error('Error producing message to Kafka. Logging for diagnosis:\ntopic: %s\nkey: '
+                                 '%s\nvalue: %s\n', config.EVICTED_PLANS_TOPIC, json.dumps(msg_key, indent=4),
+                                 json.dumps(eviction_msg, indent=4))
                     raise
-                logger.info(f'Plan evicted based on bad plan message at {common.msg_coordinates(msg)}')
+                logger.info(f'Plan evicted from DB "{db_id}" based on bad plan message at '
+                            f'{common.msg_coordinates(msg)}')
                 throttles[db_id].append(datetime.utcnow())
             else:
-                logger.warning(f'Skipped eviction - most likely the plan was already evicted upon checking the '
-                               f'target DB. {common.format_msg_info(msg)}')
+                logger.warning(f'Skipped eviction on DB "{db_id}" - the plan may have already been evicted upon '
+                               f'checking the target DB. {common.format_msg_info(msg)}')
             last_log_heartbeat = datetime.utcnow()
             kafka_consumer.store_offsets(msg)
     except KeyboardInterrupt:

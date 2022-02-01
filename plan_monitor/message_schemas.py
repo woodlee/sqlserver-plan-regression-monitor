@@ -116,6 +116,9 @@ QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA = json.dumps({
     "fields": SINGLE_PLAN_STATS_FIELDS
 })
 
+PRIOR_PLANS_SCHEMA = [x for x in SINGLE_PLAN_STATS_FIELDS
+                      if x['name'] not in ('db_identifier', 'sql_handle', 'set_options')]
+
 BAD_PLANS_MESSAGE_VALUE_AVRO_SCHEMA = json.dumps({
     "name": "bad_plans_value",
     "namespace": config.AVRO_SCHEMA_NAMESPACE,
@@ -128,7 +131,7 @@ BAD_PLANS_MESSAGE_VALUE_AVRO_SCHEMA = json.dumps({
                 "items": {
                     "type": "record",
                     "name": "prior_plan",
-                    "fields": SINGLE_PLAN_STATS_FIELDS
+                    "fields": PRIOR_PLANS_SCHEMA
                 }
             }
         },
@@ -151,7 +154,7 @@ EVICTED_PLANS_MESSAGE_VALUE_AVRO_SCHEMA = json.dumps({
                 "items": {
                     "type": "record",
                     "name": "prior_plan",
-                    "fields": SINGLE_PLAN_STATS_FIELDS
+                    "fields": PRIOR_PLANS_SCHEMA
                 }
             }
         },
