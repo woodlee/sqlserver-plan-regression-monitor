@@ -86,7 +86,7 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
 def collect() -> None:
     kafka_producer = common.build_producer(message_schemas.QUERY_STATS_MESSAGE_KEY_AVRO_SCHEMA,
                                            message_schemas.QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA)
-    result_queue = mp.Queue(10000)
+    result_queue = mp.Queue(50000)
     stop_event = mp.Event()
     produced_count = 0
     processes = []
