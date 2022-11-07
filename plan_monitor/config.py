@@ -18,6 +18,12 @@ EVICTED_PLANS_TOPIC = os.environ.get('EVICTED_PLANS_TOPIC', 'sqlserver_plan_regr
 ODBC_CONN_STRINGS = json.loads(os.environ.get('ODBC_CONN_STRINGS', '''
 {"LOCAL": "DRIVER=FreeTDS; Server=localhost; Database=MyDB; UID=sa; PWD=1Password; Port=1433; App=plan_monitor;"}'''))
 
+# Allows specifying an IANA timezone name which will be used to interpret all timestamps returned by the DB queries
+# this tool makes. Note that this value will be used for ALL DBs specified in ODBC_CONN_STRINGS. If left unspecified,
+# each DB will instead be queried for its current numeric UTC offset at process start, and that will be used instead.
+# Using a numeric offset can be problematic for DBs whose clocks may change (e.g. due to Daylight Savings Time),
+# though, hence this option:
+DB_TIMEZONE = os.environ.get('DB_TIMEZONE')  # IANA-compliant; for example 'America/Los_Angeles'
 
 # Configuration with sane defaults for most deployments but that you can change if you wish:
 # ------------------------------------------------------------------------------------------------------------

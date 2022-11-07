@@ -6,6 +6,7 @@ import queue
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any
+from zoneinfo import ZoneInfo
 
 from . import config, queries, message_schemas, common
 
@@ -20,6 +21,10 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
 
     try:
         conn, db_tz = common.get_db_conn_with_failover(odbc_conn_string)
+        if config.DB_TIMEZONE:
+            db_tz = ZoneInfo(config.DB_TIMEZONE)
+            logger.info('Ignoring TZ offset queried from DB to use IANA TZ "%s" specified in config',
+                        config.DB_TIMEZONE)
         next_poll_due = datetime.utcnow()
         read_executions_from = (datetime.now(db_tz) -
                                 timedelta(minutes=config.REFRESH_INTERVAL_MINUTES)).replace(tzinfo=None)
