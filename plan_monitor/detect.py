@@ -198,7 +198,6 @@ def detect() -> None:
                 db_identifier: str = msg_val['db_identifier']
                 sql_handle: str = msg_val['sql_handle']
                 stats_query_time: int = msg_val['stats_query_time']
-                set_options: int = msg_val['set_options']
                 msg_coordinates: str = common.msg_coordinates(msg)
 
                 caught_up: bool = time.time() - (stats_query_time / 1000) < config.MAX_ALLOWED_EVALUATION_LAG_SECONDS
@@ -220,7 +219,6 @@ def detect() -> None:
                         out_msg_val['prior_plans'] = [p.to_dict() for p in prior_plans]
                         out_msg_val['db_identifier'] = db_identifier
                         out_msg_val['sql_handle'] = sql_handle
-                        out_msg_val['set_options'] = set_options
                         out_msg_key = message_schemas.key_from_value(msg_val)
                         try:
                             kafka_producer.produce(topic=config.BAD_PLANS_TOPIC, key=out_msg_key, value=out_msg_val)

@@ -56,7 +56,7 @@ class PlanStatsStore(object):
 
     def register_stats_from_message(self, msg: Dict[str, Any],
                                     msg_coordinates: str) -> List[PlanStats]:
-        query_key = (msg["db_identifier"], msg["set_options"], msg["sql_handle"])
+        query_key = (msg["db_identifier"], msg["sql_handle"])
         current_stats = PlanStats(
             msg["plan_handle"], msg['creation_time'], msg['last_execution_time'], msg['stats_query_time'],
             msg['statement_count'], msg['execution_count'], msg['total_elapsed_time'], msg['total_logical_reads'],

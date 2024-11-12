@@ -54,7 +54,6 @@ def poll_db(db_identifier: str, odbc_conn_string: str, stop_event: mp.Event,
                             "db_identifier": db_identifier,
                             "plan_handle": f'0x{row.plan_handle.hex()}',
                             "sql_handle": f'0x{row.sql_handle.hex()}',
-                            "set_options": row.set_options,
                             "creation_time": int(row.creation_time.replace(tzinfo=db_tz).timestamp() * 1000),
                             "last_execution_time": int(
                                 row.last_execution_time.replace(tzinfo=db_tz).timestamp() * 1000),
