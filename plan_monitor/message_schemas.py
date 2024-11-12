@@ -18,10 +18,6 @@ def get_key_schema(record_name: str) -> str:
                 "type": "string"
             },
             {
-                "name": "set_options",
-                "type": "int"
-            },
-            {
                 "name": "sql_handle",
                 "type": "string"
             }
@@ -31,7 +27,6 @@ def get_key_schema(record_name: str) -> str:
 
 def key_from_value(message_value: Dict[str, Any]) -> Dict[str, Any]:
     return {"db_identifier": message_value["db_identifier"],
-            "set_options": message_value["set_options"],
             "sql_handle": message_value["sql_handle"]}
 
 
@@ -51,10 +46,6 @@ SINGLE_PLAN_STATS_FIELDS = [
     {
         "name": "sql_handle",
         "type": "string"
-    },
-    {
-        "name": "set_options",
-        "type": "int"
     },
     {
         "name": "creation_time",
@@ -117,7 +108,7 @@ QUERY_STATS_MESSAGE_VALUE_AVRO_SCHEMA = json.dumps({
 })
 
 PRIOR_PLANS_SCHEMA = [x for x in SINGLE_PLAN_STATS_FIELDS
-                      if x['name'] not in ('db_identifier', 'sql_handle', 'set_options')]
+                      if x['name'] not in ('db_identifier', 'sql_handle')]
 
 BAD_PLANS_MESSAGE_VALUE_AVRO_SCHEMA = json.dumps({
     "name": "bad_plans_value",

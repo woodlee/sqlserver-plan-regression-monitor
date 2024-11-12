@@ -22,7 +22,6 @@ WITH recent_plans AS (
     SELECT
         qs.plan_handle AS plan_handle
         , qs.sql_handle AS sql_handle
-        , CAST(epa.value AS INT) AS set_options
         , MIN(qs.creation_time) AS creation_time
         , MAX(qs.last_execution_time) AS last_execution_time
         , MAX(qs.execution_count) AS execution_count
@@ -37,9 +36,7 @@ WITH recent_plans AS (
         , GETDATE() AS stats_query_time
     FROM recent_plans
     JOIN sys.dm_exec_query_stats AS qs ON (recent_plans.plan_handle = qs.plan_handle)
-    CROSS APPLY sys.dm_exec_plan_attributes(qs.plan_handle) AS epa
-    WHERE epa.attribute = 'set_options'
-    GROUP BY qs.plan_handle, qs.sql_handle, epa.value
+    GROUP BY qs.plan_handle, qs.sql_handle
 )
 SELECT * FROM agged
 WHERE (total_logical_writes = 0 OR statement_count > 1)
@@ -51,7 +48,6 @@ WHERE (total_logical_writes = 0 OR statement_count > 1)
 class StatsDmvsQueryResult(NamedTuple):
     plan_handle: bytes
     sql_handle: bytes
-    set_options: int
     creation_time: datetime
     last_execution_time: datetime
     execution_count: int
